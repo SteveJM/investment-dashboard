@@ -1,0 +1,29 @@
+# Templated by the official nginx image's docker-entrypoint.d envsubst step
+# at container start (envsubst runs on every *.template file under
+# /etc/nginx/templates/, substituting variables from the container
+# environment - see Dockerfile for SERVICE_HOST/SERVICE_PORT/API_KEY).
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Single-page app: let react-router handle client-side routes.
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # Proxy API calls to the service container. The frontend bundle never
+    # contains the API key (see src/api/client.ts) - it's injected here,
+    # server-side, so it never reaches the browser.
+    location /api/ {
+        proxy_pass http://${SERVICE_HOST}:${SERVICE_PORT}/api/;
+        proxy_set_header Authorization "Bearer ${API_KEY}";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
