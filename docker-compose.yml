@@ -25,6 +25,9 @@ services:
       API_KEY: ${API_KEY:-devkey}
       PRICE_PROVIDER: ${PRICE_PROVIDER:-yahoo}
       NEWS_PROVIDER: ${NEWS_PROVIDER:-yahoo}
+      SUMMARY_PROVIDER: ${SUMMARY_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       ACCOUNTS: ${ACCOUNTS:-ISA,Taxable,Pension}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
     depends_on:

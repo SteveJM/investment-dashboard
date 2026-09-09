@@ -84,6 +84,13 @@ export interface CalendarEvent {
   createdAt: string;
 }
 
+/** One day's closing price - see components/PriceChart.tsx. `date` is a full ISO timestamp string (midnight UTC) even though it's really just a calendar date server-side; `new Date(date)` handles it fine. */
+export interface PriceHistoryPoint {
+  date: string;
+  close: number;
+  currency: string;
+}
+
 export interface NewsItem {
   id: string;
   ticker: { symbol: string; name: string };
@@ -94,4 +101,11 @@ export interface NewsItem {
   publishedAt: string;
   fetchedAt: string;
   isRead: boolean;
+}
+
+/** A ticker's on-demand LLM news summary - see components/NewsSummaryCard.tsx. Only the latest is ever kept; regenerating overwrites it and bumps `createdAt`. */
+export interface NewsSummary {
+  tickerSymbol: string;
+  summary: string;
+  createdAt: string;
 }

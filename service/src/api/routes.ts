@@ -6,6 +6,9 @@ import {
   addWatchlistItem,
   createArticle,
   getArticleBySlug,
+  getNewsSummary,
+  getPriceHistory,
+  getTicker,
   listArticles,
   listCalendarEvents,
   listNews,
@@ -23,6 +26,7 @@ import {
   upsertPortfolioHolding,
 } from '../db/queries.js';
 import { refreshStaleNews } from '../services/newsRefresh.js';
+import { generateNewsSummary } from '../services/newsSummary.js';
 import { refreshStalePortfolioPrices, refreshStaleWatchlistPrices } from '../services/priceRefresh.js';
 import { requireApiKey } from './auth.js';
 
@@ -126,6 +130,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/tickers', async () => listTickers());
+
+  // Read-only - this endpoint never fetches from the price provider itself,
+  // it only serves whatever's already been backfilled (see
+  // src/cli/backfillHistory.ts / service/README.md). Returns everything
+  // stored (up to however far back the CLI was told to go, normally a
+  // year), ascending by date; the frontend slices this into its 1M/3M/6M
+  // chart views and computes moving averages over the full series before
+  // slicing, so a short-range view still has correct MA values from its
+  // first visible day.
+  app.get('/api/tickers/:symbol/history', async (req) => {
+    const { symbol } = req.params as { symbol: string };
+    return getPriceHistory(symbol);
+  });
 
   // Lets the frontend build its account dropdowns/filters from the same
   // ACCOUNTS env var the API validates against, rather than keeping its own
@@ -284,5 +301,42 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return { error: `No news item with id "${id}"` };
     }
     return item;
+  });
+
+  // Read-only - serves whatever's already been generated, never triggers a
+  // generation itself. `null` (200, not 404) when nothing's been generated
+  // yet for a ticker that does exist - that's a normal state the frontend
+  // renders as "no summary yet", not an error. A genuinely unknown ticker
+  // still 404s.
+  app.get('/api/tickers/:symbol/news-summary', async (req, reply) => {
+    const { symbol } = req.params as { symbol: string };
+    const ticker = await getTicker(symbol);
+    if (!ticker) {
+      reply.code(404);
+      return { error: `No ticker "${symbol}"` };
+    }
+    return getNewsSummary(symbol);
+  });
+
+  // The "Generate News Summary" button - a real LLM call (see
+  // src/services/newsSummary.ts / src/providers/summaries.ts), so this can
+  // take a few seconds and, unlike every other route here, can fail for
+  // reasons outside our control (the provider's API being down, rate
+  // limits, a misconfigured/missing API key). Surfaced as 502 with the
+  // provider's own error message rather than a generic 500, so the button's
+  // error state can show something actionable.
+  app.post('/api/tickers/:symbol/news-summary', async (req, reply) => {
+    const { symbol } = req.params as { symbol: string };
+    const ticker = await getTicker(symbol);
+    if (!ticker) {
+      reply.code(404);
+      return { error: `No ticker "${symbol}"` };
+    }
+    try {
+      return await generateNewsSummary(ticker);
+    } catch (err) {
+      reply.code(502);
+      return { error: err instanceof Error ? err.message : 'Failed to generate news summary' };
+    }
   });
 }

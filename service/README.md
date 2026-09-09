@@ -14,9 +14,11 @@ src/
     queries.ts         all reads/writes - shared by REST routes and MCP tools
   providers/
     prices.ts          pluggable price provider - real (yahoo-finance2) + mock implementations
-    news.ts             pluggable news provider (mock implementation only, for now)
+    news.ts             pluggable news provider - real (yahoo-finance2) + mock implementations
+    summaries.ts         pluggable news-summary provider - real (Gemini) + mock implementations
   services/
     newsRefresh.ts       refreshes stale watch-list news from the news provider
+    newsSummary.ts        generates + stores a ticker's on-demand news summary
   api/
     auth.ts              bearer-token auth middleware
     routes.ts            REST endpoints, mounted under /api
@@ -94,6 +96,84 @@ API (NewsAPI, Finnhub, etc.), add a `case` to `getNewsProvider()`, and set
 `NEWS_PROVIDER=` - no other code needs to change. Same pattern to add a
 different real price source later (Alpha Vantage, Polygon, etc.) alongside
 or instead of `yahoo`.
+
+## Price history & backfill CLI
+
+`GET /api/tickers/:symbol/history` returns whatever's in the `price_history`
+table for that ticker (ascending by date) - `[]` if nothing's been
+backfilled yet. It's what the frontend's ticker-detail chart reads; nothing
+in the request path calls out to the price provider itself, so the table
+has to be populated separately. That's deliberate: a chart render shouldn't
+also trigger a live network call, and backfilling a year of daily closes
+for every ticker on every quote refresh would be wasteful and easy to
+rate-limit.
+
+Populate (or refresh) it with the `backfill-history` CLI, run inside the
+service container so it shares the container's `DATABASE_URL` and
+`PRICE_PROVIDER`:
+
+```bash
+# One ticker, default lookback (365 days)
+docker compose exec service node dist/cli/backfillHistory.js --symbol=AAL
+
+# Every ticker already on the watch-list/portfolio (skips creating new ones)
+docker compose exec service node dist/cli/backfillHistory.js --all
+
+# Custom lookback
+docker compose exec service node dist/cli/backfillHistory.js --symbol=AAL --days=90
+```
+
+It upserts on `(ticker_symbol, price_date)`, so re-running it (e.g. on a
+schedule) is safe and just refreshes/extends what's there rather than
+duplicating rows. With `--all`, a failure fetching one ticker is logged and
+skipped rather than aborting the rest; the process exits non-zero if any
+ticker failed.
+
+Run it against `PRICE_PROVIDER=mock` (the default in local dev without a
+`.env`) to backfill deterministic fake data with no network calls - useful
+for demoing the chart. Real backfills need `PRICE_PROVIDER=yahoo` (the
+container's default), which uses `yahoo-finance2`'s `chart()` endpoint -
+same unofficial API and pence-normalization caveat as the live quotes
+described above.
+
+## News summary ("Generate News Summary" button)
+
+Each ticker page has a "Generate News Summary" button that summarizes that
+ticker's recent news (whatever's already in `news_items` - it doesn't
+itself trigger a news refresh) via an LLM call, and shows the result with a
+"Generated <timestamp>" line underneath. It's on-demand only - a real API
+call with real latency and (for the real provider) real cost, so nothing
+generates one automatically.
+
+- `GET /api/tickers/:symbol/news-summary` - read-only, returns the
+  currently-stored summary (`null` if none has been generated yet - that's
+  a normal state, not a 404; only an unknown ticker 404s).
+- `POST /api/tickers/:symbol/news-summary` - generates a fresh one
+  (overwriting any previous one - only the latest is ever kept) and returns
+  it. This is what the button calls.
+
+`providers/summaries.ts` follows the same pluggable-provider pattern as
+prices/news, selected via `SUMMARY_PROVIDER=`:
+
+- **`gemini`** (the default) - calls Google's Gemini `generateContent`
+  endpoint, following the request shape from the project's reference doc:
+  a prompt of the form "Summarize the following scraped web page
+  contents:\n\nArticle 1:\n[text]\n\nArticle 2:\n[text]...". For each news
+  item it best-effort *scrapes* the article's own URL for real page text
+  (strips `<script>`/`<style>`/tags, caps length) rather than only using
+  the short cached headline/snippet, falling back to the headline+snippet
+  when a fetch fails - expected for plenty of sites (paywalls, bot
+  checks, JS-rendered pages, dead links), not a bug. Requires
+  `GEMINI_API_KEY` (get one at <https://aistudio.google.com/apikey>);
+  `GEMINI_MODEL` defaults to `gemini-3.6-flash`. **Not independently
+  network-verified from within this sandbox** - its egress policy blocks
+  both `generativelanguage.googleapis.com` and the news sites being
+  scraped, the same disclosed limitation as the Yahoo-backed providers
+  above. The request/response shape matches Gemini's published API and the
+  project's own reference doc exactly; worth a first real run to confirm.
+- **`mock`** - deterministic placeholder text built from the cached
+  headlines, no network calls, no API key needed. Use this for offline
+  dev/demo, or if you haven't got a Gemini key yet.
 
 ## Auth
 

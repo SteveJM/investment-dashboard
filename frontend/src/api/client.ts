@@ -1,4 +1,4 @@
-import type { Account, Article, ArticleSummary, CalendarEvent, NewsItem, PortfolioHolding, Ticker, WatchlistItem } from './types';
+import type { Account, Article, ArticleSummary, CalendarEvent, NewsItem, NewsSummary, PortfolioHolding, PriceHistoryPoint, Ticker, WatchlistItem } from './types';
 
 // In the production/Docker build these are unset, so requests go to
 // same-origin relative paths (e.g. `/api/tickers`) and nginx proxies them
@@ -54,6 +54,24 @@ function qs(params: Record<string, string | undefined>): string {
 export const api = {
   tickers: {
     list: () => request<Ticker[]>('/api/tickers'),
+    // Whatever's been backfilled (see service/README.md's CLI section) -
+    // this never triggers a fetch itself, so it can come back empty.
+    history: (symbol: string) => request<PriceHistoryPoint[]>(`/api/tickers/${encodeURIComponent(symbol)}/history`),
+    // Whatever's already been generated - null (not an error) if nothing
+    // has, which is the normal state before the first "Generate News
+    // Summary" click. Never triggers generation itself.
+    newsSummary: async (symbol: string): Promise<NewsSummary | null> => {
+      try {
+        return await request<NewsSummary | null>(`/api/tickers/${encodeURIComponent(symbol)}/news-summary`);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }
+    },
+    // The actual LLM call - real latency, and for the real provider real
+    // cost, so this is only ever triggered by the button, never automatically.
+    generateNewsSummary: (symbol: string) =>
+      request<NewsSummary>(`/api/tickers/${encodeURIComponent(symbol)}/news-summary`, { method: 'POST' }),
   },
   accounts: {
     list: () => request<Account[]>('/api/accounts'),

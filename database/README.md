@@ -38,6 +38,21 @@ Postgres 16 image with the Investment Dashboard schema baked in.
   pair, tracked independently of the watch-list. Applied automatically on a
   fresh volume; for an already-running deployment, apply it by hand (see
   below).
+- `init/009_add_portfolio_manual_price.sql` - adds
+  `portfolio_holdings.manual_price` / `manual_price_updated_at` - a by-hand
+  override for holdings the automatic price provider quotes unreliably.
+  Applied automatically on a fresh volume; for an already-running
+  deployment, apply it by hand (see below).
+- `init/010_add_price_history.sql` - creates `price_history` (ticker,
+  date, close, currency) - daily closing prices behind the ticker page's
+  price chart, populated by the `backfill-history` CLI (see
+  `service/README.md`). Applied automatically on a fresh volume; for an
+  already-running deployment, apply it by hand (see below).
+- `init/011_add_news_summaries.sql` - creates `news_summaries` (one row per
+  ticker, overwritten on each regeneration) - the ticker page's on-demand
+  "Generate News Summary" output, plus when it was generated. Applied
+  automatically on a fresh volume; for an already-running deployment, apply
+  it by hand (see below).
 
 ## How migrations run
 

@@ -14,6 +14,20 @@ export interface Ticker {
   createdAt: string;
 }
 
+// A daily closing price - see 010_add_price_history.sql. Populated by the
+// backfill CLI (src/cli/backfillHistory.ts), read by the ticker page's
+// price chart (GET /api/tickers/:symbol/history). Always GBP, like every
+// other price column in this schema.
+export interface PriceHistoryPoint {
+  // ISO 8601 - a plain calendar date under the hood (Postgres DATE), but pg
+  // serializes it as a full midnight-UTC timestamp string, same as
+  // CalendarEvent's `date` field. New Date(point.date) parses it fine
+  // either way; don't assume it's exactly "YYYY-MM-DD".
+  date: string;
+  close: number;
+  currency: string;
+}
+
 export interface ArticleTickerRef {
   symbol: string;
   name: string;
@@ -100,6 +114,16 @@ export interface NewsItem {
   publishedAt: string;
   fetchedAt: string;
   isRead: boolean;
+}
+
+// One ticker's on-demand LLM summary of its recent news - see
+// 011_add_news_summaries.sql. Only the latest is kept; regenerating
+// overwrites `summary` and bumps `createdAt`, which the frontend shows as
+// "Generated <timestamp>" underneath the text.
+export interface NewsSummary {
+  tickerSymbol: string;
+  summary: string;
+  createdAt: string;
 }
 
 export interface CreateArticleTickerInput {

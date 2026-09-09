@@ -1,10 +1,12 @@
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { AsyncSection } from '../components/AsyncSection';
-import { AccountBadge, ConvictionBadge, EventTypeBadge, QuoteCell } from '../components/Badges';
+import { ConvictionBadge, EventTypeBadge } from '../components/Badges';
+import { NewsSummaryCard } from '../components/NewsSummaryCard';
+import { PriceChart } from '../components/PriceChart';
 import { useAsync } from '../hooks/useAsync';
 import { useNewsReadTracking } from '../hooks/useNewsReadTracking';
-import { formatDate, formatDateTime, formatGBP } from '../util/format';
+import { formatDate, formatDateTime } from '../util/format';
 
 export function TickerPage() {
   const { symbol = '' } = useParams();
@@ -30,24 +32,7 @@ export function TickerPage() {
         {watchlistEntry && watchlistEntry.status === 'active' && <ConvictionBadge conviction={watchlistEntry.conviction} />}
       </div>
 
-      {watchlistEntry && (
-        <div className="card">
-          <h3>Watch-list status</h3>
-          <p style={{ margin: '0 0 8px' }}>
-            {watchlistEntry.status === 'active' ? 'Active' : 'Removed'}
-            {watchlistEntry.notes && <> — {watchlistEntry.notes}</>}
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <AccountBadge account={watchlistEntry.account} />
-            {watchlistEntry.buyBelow != null && (
-              <span className="muted" style={{ fontSize: 13 }}>
-                Buy below {formatGBP(watchlistEntry.buyBelow)}
-              </span>
-            )}
-            <QuoteCell quote={watchlistEntry.quote} buyBelow={watchlistEntry.buyBelow} />
-          </div>
-        </div>
-      )}
+      <PriceChart symbol={symbol} buyBelow={watchlistEntry?.buyBelow ?? null} newsDates={news.data?.map((n) => n.publishedAt) ?? []} />
 
       <div className="card">
         <h3>Articles referencing {symbol}</h3>
@@ -96,6 +81,8 @@ export function TickerPage() {
           )}
         </AsyncSection>
       </div>
+
+      <NewsSummaryCard symbol={symbol} />
 
       <div className="card">
         <h3>News</h3>

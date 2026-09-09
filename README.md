@@ -26,6 +26,8 @@ Each folder has its own README with more detail.
 - **Watch-list**: tickers surfaced by research articles (or added manually).
 - **News**: recent headlines for everything on the watch-list (currently a mock provider - see `service/providers/news.ts`).
 - **Articles**: the research write-ups themselves. Ticker symbols and calendar entries link back to the article that produced them.
+- **Price chart**: each ticker's detail page has an interactive 1M/3M/6M price chart with 20-/50-day moving-average overlays, reading whatever's in the `price_history` table. That table is populated separately via a CLI backfill (`backfill-history`, run inside the `service` container) rather than on the fly - see `service/README.md`.
+- **News summary**: a "Generate News Summary" button on each ticker's detail page summarizes its recent news via an LLM call (Gemini by default), showing the result with a "Generated <timestamp>" line. On-demand only - see `service/README.md`.
 
 Research articles are meant to be written by Claude via the **MCP server**
 (`create_article` and friends) - e.g. as part of a weekly scheduled research

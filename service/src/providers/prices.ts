@@ -21,10 +21,23 @@ export interface Quote {
   asOf: string;
 }
 
+/** One day's closing price, always normalized to whole-pound GBP - see `HistoricalPoint`'s producers below. */
+export interface HistoricalPoint {
+  date: string; // YYYY-MM-DD
+  close: number; // GBP
+}
+
 export interface PriceProvider {
   /** `exchange` is an optional hint (from `tickers.exchange`) a provider can use to pick the right market/symbol suffix. */
   getQuote(symbol: string, exchange?: string | null): Promise<Quote>;
   getQuotes(symbols: string[]): Promise<Quote[]>;
+  /**
+   * Daily closing prices from `from` to `to` (inclusive), weekdays only -
+   * for the price-history backfill CLI (`src/cli/backfillHistory.ts`).
+   * Implementations skip non-trading days rather than returning a null/gap
+   * entry for them.
+   */
+  getHistory(symbol: string, exchange: string | null | undefined, from: Date, to: Date): Promise<HistoricalPoint[]>;
 }
 
 /**
@@ -72,6 +85,31 @@ export class MockPriceProvider implements PriceProvider {
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
     return Promise.all(symbols.map((s) => this.getQuote(s)));
+  }
+
+  /**
+   * Deterministic fake daily-close series, anchored at the same base price
+   * as `getQuote` (so the two are at least in the same ballpark) and walked
+   * forward day-by-day with a small seeded drift - re-running the backfill
+   * CLI against the mock provider reproduces the exact same series, useful
+   * for tests/screenshots. Weekends are skipped, same as real trading data.
+   */
+  async getHistory(symbol: string, _exchange: string | null | undefined, from: Date, to: Date): Promise<HistoricalPoint[]> {
+    const points: HistoricalPoint[] = [];
+    let price = 0.5 + seededRandom(symbol) * 39.5;
+    const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+    const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
+    while (cursor.getTime() <= end.getTime()) {
+      const day = cursor.getUTCDay();
+      if (day !== 0 && day !== 6) {
+        const dateStr = cursor.toISOString().slice(0, 10);
+        const drift = (seededRandom(`${symbol}:${dateStr}`) - 0.5) * 0.03; // +/-1.5%/day
+        price = Math.max(0.05, price * (1 + drift));
+        points.push({ date: dateStr, close: Math.round(price * 100) / 100 });
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return points;
   }
 }
 
@@ -160,6 +198,26 @@ export class YahooFinancePriceProvider implements PriceProvider {
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
     return Promise.all(symbols.map((s) => this.getQuote(s)));
+  }
+
+  /**
+   * Daily closes via `chart()` (yahoo-finance2's historical-data module,
+   * distinct from `quote()` above) - same pence-vs-pounds normalization,
+   * keyed off the *result's* `meta.currency` this time rather than a
+   * per-quote field, since `chart()` reports one currency for the whole
+   * series rather than per-point.
+   */
+  async getHistory(symbol: string, exchange: string | null | undefined, from: Date, to: Date): Promise<HistoricalPoint[]> {
+    const yahooSymbol = toYahooSymbol(symbol, exchange);
+    const result = await this.client.chart(yahooSymbol, { period1: from, period2: to, interval: '1d' });
+    const isPence = result.meta.currency === 'GBp';
+    const points: HistoricalPoint[] = [];
+    for (const q of result.quotes) {
+      if (q.close == null) continue; // gap - holiday, halted trading, etc.
+      const close = isPence ? q.close / 100 : q.close;
+      points.push({ date: q.date.toISOString().slice(0, 10), close: Math.round(close * 100) / 100 });
+    }
+    return points;
   }
 }
 

@@ -13,7 +13,7 @@ function required(name: string, fallback?: string): string {
 // plain comma-separated env var rather than a hard-coded list. Validated
 // (non-empty) at startup since both the REST/MCP request schemas and the
 // frontend's dropdowns are built from this list - see service/README.md.
-const accounts = (process.env.ACCOUNTS ?? 'ISA,Taxable,Pension')
+const accounts = (process.env.ACCOUNTS ?? 'Steve ISA,Ruth ISA,Steve Pension')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -29,6 +29,13 @@ export const config = {
   apiKey: required('API_KEY', 'devkey'),
   priceProvider: process.env.PRICE_PROVIDER ?? 'yahoo',
   newsProvider: process.env.NEWS_PROVIDER ?? 'yahoo',
+  // Powers the ticker page's "Generate News Summary" button - see
+  // src/providers/summaries.ts. GEMINI_API_KEY is only required when
+  // summaryProvider is 'gemini' (the default); unset it and set
+  // SUMMARY_PROVIDER=mock for offline dev/demo with no API key.
+  summaryProvider: process.env.SUMMARY_PROVIDER ?? 'gemini',
+  geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+  geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.6-flash',
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
   accounts,
 } as const;

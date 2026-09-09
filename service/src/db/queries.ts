@@ -10,7 +10,9 @@ import type {
   Conviction,
   CreateArticleInput,
   NewsItem,
+  NewsSummary,
   PortfolioHolding,
+  PriceHistoryPoint,
   Ticker,
   WatchlistItem,
   WatchlistQuote,
@@ -107,6 +109,12 @@ export async function listTickers(): Promise<Ticker[]> {
   return result.rows.map(mapTicker);
 }
 
+/** Single-ticker lookup - mainly for the backfill CLI, which needs a ticker's stored `exchange` before it can ask a price provider for history. */
+export async function getTicker(symbol: string): Promise<Ticker | null> {
+  const result = await pool.query<TickerRow>('SELECT * FROM tickers WHERE symbol = $1', [symbol.toUpperCase()]);
+  return result.rows[0] ? mapTicker(result.rows[0]) : null;
+}
+
 export async function upsertTicker(
   client: Queryable,
   input: { symbol: string; name?: string; exchange?: string }
@@ -135,6 +143,64 @@ export async function upsertTicker(
     [symbol, input.name, input.exchange ?? null]
   );
   return mapTicker(inserted.rows[0]!);
+}
+
+// ---------------------------------------------------------------------------
+// Price history
+//
+// A time series per ticker (see 010_add_price_history.sql), independent of
+// the watch-list/portfolio quote-cache columns (those hold one *current*
+// price per row, refreshed opportunistically; this holds a whole daily
+// series, populated only by the backfill CLI - nothing refreshes it on a
+// read the way the quote-cache columns do).
+// ---------------------------------------------------------------------------
+
+interface PriceHistoryRow {
+  price_date: string; // pg DATE comes back as 'YYYY-MM-DD'
+  close_price: string;
+  currency: string;
+}
+
+function mapPriceHistoryPoint(row: PriceHistoryRow): PriceHistoryPoint {
+  return { date: row.price_date, close: Number(row.close_price), currency: row.currency };
+}
+
+/** Full stored history for one ticker, ascending by date - the chart slices this into its 1M/3M/6M views client-side rather than this taking a range param, so a moving average has lookback data before the visible window's start. */
+export async function getPriceHistory(symbol: string): Promise<PriceHistoryPoint[]> {
+  const result = await pool.query<PriceHistoryRow>(
+    'SELECT price_date, close_price, currency FROM price_history WHERE ticker_symbol = $1 ORDER BY price_date ASC',
+    [symbol.toUpperCase()]
+  );
+  return result.rows.map(mapPriceHistoryPoint);
+}
+
+/**
+ * Batch-upserts a ticker's daily closes (one round trip, not one per point) -
+ * what the backfill CLI calls. Existing dates are overwritten (a re-run with
+ * a corrected/refreshed value replaces what was there), everything else is
+ * left untouched. Returns the number of rows written.
+ */
+export async function upsertPriceHistory(
+  symbol: string,
+  points: Array<{ date: string; close: number; currency?: string }>
+): Promise<number> {
+  if (points.length === 0) return 0;
+  const upperSymbol = symbol.toUpperCase();
+  const values: string[] = [];
+  const params: unknown[] = [];
+  for (const p of points) {
+    params.push(upperSymbol, p.date, p.close, p.currency ?? 'GBP');
+    const base = params.length - 4;
+    values.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`);
+  }
+  const result = await pool.query(
+    `INSERT INTO price_history (ticker_symbol, price_date, close_price, currency)
+     VALUES ${values.join(', ')}
+     ON CONFLICT (ticker_symbol, price_date) DO UPDATE
+       SET close_price = EXCLUDED.close_price, currency = EXCLUDED.currency`,
+    params
+  );
+  return result.rowCount ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -939,4 +1005,44 @@ export async function markNewsItemRead(id: string): Promise<NewsItem | null> {
   await pool.query(`UPDATE news_items SET is_read = true WHERE id = $1`, [id]);
   const result = await pool.query<NewsRow>(`${NEWS_SELECT} WHERE n.id = $1`, [id]);
   return result.rows[0] ? mapNewsItem(result.rows[0]) : null;
+}
+
+// ---------------------------------------------------------------------------
+// News summaries
+// ---------------------------------------------------------------------------
+
+interface NewsSummaryRow {
+  ticker_symbol: string;
+  summary: string;
+  created_at: Date;
+}
+
+function mapNewsSummary(row: NewsSummaryRow): NewsSummary {
+  return {
+    tickerSymbol: row.ticker_symbol,
+    summary: row.summary,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+/** The ticker's current stored summary, if one's been generated - `null` if it never has (a normal, non-error state; see the "Generate News Summary" button). */
+export async function getNewsSummary(symbol: string): Promise<NewsSummary | null> {
+  const result = await pool.query<NewsSummaryRow>(
+    'SELECT ticker_symbol, summary, created_at FROM news_summaries WHERE ticker_symbol = $1',
+    [symbol.toUpperCase()]
+  );
+  return result.rows[0] ? mapNewsSummary(result.rows[0]) : null;
+}
+
+/** Upsert-overwrite: regenerating a summary replaces the previous one and bumps `created_at` - only the latest is ever kept, there's no history table for these. */
+export async function upsertNewsSummary(symbol: string, summary: string): Promise<NewsSummary> {
+  const result = await pool.query<NewsSummaryRow>(
+    `INSERT INTO news_summaries (ticker_symbol, summary)
+     VALUES ($1, $2)
+     ON CONFLICT (ticker_symbol) DO UPDATE
+       SET summary = EXCLUDED.summary, created_at = now()
+     RETURNING ticker_symbol, summary, created_at`,
+    [symbol.toUpperCase(), summary]
+  );
+  return mapNewsSummary(result.rows[0]!);
 }
