@@ -7,19 +7,27 @@ import {
   createArticle,
   getArticleBySlug,
   listCalendarEvents,
+  listPortfolio,
   listWatchlist,
+  removePortfolioHolding,
   removeWatchlistItem,
   searchArticles,
+  setPortfolioManualPrice,
   setWatchlistAccount,
   setWatchlistBuyBelow,
+  updatePortfolioHolding,
+  upsertPortfolioHolding,
 } from '../db/queries.js';
-import { refreshStaleWatchlistPrices } from '../services/priceRefresh.js';
+import { refreshStalePortfolioPrices, refreshStaleWatchlistPrices } from '../services/priceRefresh.js';
 
 const convictionSchema = z.enum(['high', 'medium', 'low']);
 const eventTypeSchema = z.enum(['earnings', 'dividend', 'macro', 'catalyst', 'other']);
 // config.accounts is validated non-empty at startup (see config.ts), so this cast is safe.
 const accountSchema = z.enum(config.accounts as [string, ...string[]]);
 const buyBelowSchema = z.number().positive();
+const quantitySchema = z.number().positive();
+const averageCostSchema = z.number().positive();
+const manualPriceSchema = z.number().positive();
 
 function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -174,6 +182,111 @@ export function createInvestmentDashboardMcpServer(): McpServer {
     async ({ status }) => {
       await refreshStaleWatchlistPrices();
       return jsonResult(await listWatchlist(status ?? 'active'));
+    }
+  );
+
+  server.registerTool(
+    'add_portfolio_holding',
+    {
+      title: 'Add/update portfolio holding',
+      description:
+        'Adds a holding to the portfolio - tickers you actually own, tracked independently of the watch-list ' +
+        '(a ticker can be on neither, either, or both). If this ticker is already held in this account, its ' +
+        'quantity and average cost are overwritten with the values given here.',
+      inputSchema: {
+        symbol: z.string(),
+        name: z.string().optional().describe('Required if this ticker has never been referenced before'),
+        exchange: z.string().optional(),
+        account: accountSchema.describe('Which account this position is held in'),
+        quantity: quantitySchema.describe('Number of shares/units held'),
+        averageCost: averageCostSchema.describe('Average cost per share/unit, in GBP'),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(await upsertPortfolioHolding(args));
+      } catch (err) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    }
+  );
+
+  server.registerTool(
+    'set_portfolio_holding',
+    {
+      title: 'Update portfolio holding quantity/cost',
+      description:
+        'Updates the quantity and/or average cost of an existing portfolio holding, addressed by ticker + account. ' +
+        'Unlike add_portfolio_holding, this only touches the fields given - the other is left as-is.',
+      inputSchema: {
+        symbol: z.string(),
+        account: accountSchema.describe('Which account the holding is in'),
+        quantity: quantitySchema.optional(),
+        averageCost: averageCostSchema.optional(),
+      },
+    },
+    async ({ symbol, account, quantity, averageCost }) => {
+      if (quantity === undefined && averageCost === undefined) {
+        return errorResult('Provide quantity and/or averageCost');
+      }
+      const holding = await updatePortfolioHolding(symbol, account, { quantity, averageCost });
+      return holding ? jsonResult(holding) : errorResult(`No portfolio holding for ${symbol} in "${account}"`);
+    }
+  );
+
+  server.registerTool(
+    'remove_portfolio_holding',
+    {
+      title: 'Remove portfolio holding',
+      description:
+        'Marks a portfolio holding as removed (soft delete - history is kept). Addressed by ticker + account, since ' +
+        'the same ticker can be held separately across multiple accounts. To move a holding between accounts, ' +
+        'remove it here and add_portfolio_holding it under the new account.',
+      inputSchema: {
+        symbol: z.string(),
+        account: accountSchema,
+      },
+    },
+    async ({ symbol, account }) => {
+      const holding = await removePortfolioHolding(symbol, account);
+      return holding ? jsonResult(holding) : errorResult(`No portfolio holding for ${symbol} in "${account}"`);
+    }
+  );
+
+  server.registerTool(
+    'set_portfolio_manual_price',
+    {
+      title: 'Set/clear portfolio holding manual price',
+      description:
+        'Overrides the automatic (Yahoo Finance) price for a portfolio holding with a value you supply, addressed ' +
+        'by ticker + account - for a ticker whose automatic quote is missing or unreliable (e.g. a thinly-covered ' +
+        'UK OEIC fund frozen on a years-old snapshot). While set, this takes over market value/gain-loss entirely ' +
+        'and the holding is skipped by the automatic price refresh. Pass null to clear it and go back to automatic.',
+      inputSchema: {
+        symbol: z.string(),
+        account: accountSchema.describe('Which account the holding is in'),
+        price: manualPriceSchema.nullable().describe('Price per share/unit in GBP, or null to clear the override and resume automatic pricing'),
+      },
+    },
+    async ({ symbol, account, price }) => {
+      const holding = await setPortfolioManualPrice(symbol, account, price);
+      return holding ? jsonResult(holding) : errorResult(`No portfolio holding for ${symbol} in "${account}"`);
+    }
+  );
+
+  server.registerTool(
+    'list_portfolio',
+    {
+      title: 'List portfolio holdings',
+      description: 'Lists current portfolio holdings (default: active only), each with its latest cached quote.',
+      inputSchema: {
+        account: accountSchema.optional().describe('Only holdings in this account'),
+        status: z.enum(['active', 'removed', 'all']).optional(),
+      },
+    },
+    async ({ account, status }) => {
+      await refreshStalePortfolioPrices();
+      return jsonResult(await listPortfolio({ account, status: status ?? 'active' }));
     }
   );
 

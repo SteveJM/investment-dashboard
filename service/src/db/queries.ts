@@ -10,6 +10,7 @@ import type {
   Conviction,
   CreateArticleInput,
   NewsItem,
+  PortfolioHolding,
   Ticker,
   WatchlistItem,
   WatchlistQuote,
@@ -308,13 +309,23 @@ interface WatchlistRow {
   source_article_slug: string | null;
 }
 
-function mapWatchlistQuote(row: WatchlistRow): WatchlistQuote | null {
-  if (row.latest_price === null || row.price_updated_at === null) return null;
+/**
+ * Shared by watch-list rows and portfolio-holding rows - both cache a quote
+ * via the same four columns (see 005_add_watchlist_price.sql /
+ * 008_add_portfolio_holdings.sql), refreshed the same opportunistic way.
+ */
+function mapQuoteColumns(cols: {
+  latest_price: string | null;
+  latest_price_change_percent: string | null;
+  latest_price_currency: string | null;
+  price_updated_at: Date | null;
+}): WatchlistQuote | null {
+  if (cols.latest_price === null || cols.price_updated_at === null) return null;
   return {
-    price: Number(row.latest_price),
-    changePercent: row.latest_price_change_percent !== null ? Number(row.latest_price_change_percent) : 0,
-    currency: row.latest_price_currency ?? 'GBP',
-    asOf: row.price_updated_at.toISOString(),
+    price: Number(cols.latest_price),
+    changePercent: cols.latest_price_change_percent !== null ? Number(cols.latest_price_change_percent) : 0,
+    currency: cols.latest_price_currency ?? 'GBP',
+    asOf: cols.price_updated_at.toISOString(),
   };
 }
 
@@ -335,7 +346,7 @@ function mapWatchlistItem(row: WatchlistRow): WatchlistItem {
     // this column is a display/comparison value, not used in arithmetic
     // that needs that precision, so a plain number is fine here.
     buyBelow: row.buy_below !== null ? Number(row.buy_below) : null,
-    quote: mapWatchlistQuote(row),
+    quote: mapQuoteColumns(row),
     sourceArticle: row.source_article_id
       ? { id: row.source_article_id, title: row.source_article_title!, slug: row.source_article_slug! }
       : null,
@@ -482,6 +493,248 @@ export async function removeWatchlistItem(symbol: string): Promise<WatchlistItem
   if (result.rowCount === 0) return null;
   const full = await pool.query<WatchlistRow>(`${WATCHLIST_SELECT} WHERE w.ticker_symbol = $1`, [symbol.toUpperCase()]);
   return full.rows[0] ? mapWatchlistItem(full.rows[0]) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio holdings
+//
+// Deliberately independent of the watch-list (see 008_add_portfolio_holdings.sql)
+// - a ticker being held says nothing about whether it's also being watched,
+// and vice versa. Addressed by the natural (symbol, account) composite key
+// rather than the row's UUID, since that pair is what's unique/meaningful to
+// callers (REST paths, MCP tool args) - the id is an implementation detail.
+// ---------------------------------------------------------------------------
+
+interface PortfolioRow {
+  id: string;
+  account: string;
+  quantity: string;
+  average_cost: string;
+  status: 'active' | 'removed';
+  latest_price: string | null;
+  latest_price_change_percent: string | null;
+  latest_price_currency: string | null;
+  price_updated_at: Date | null;
+  manual_price: string | null;
+  manual_price_updated_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  ticker_symbol: string;
+  ticker_name: string;
+  ticker_exchange: string | null;
+  ticker_created_at: Date;
+}
+
+function mapPortfolioHolding(row: PortfolioRow): PortfolioHolding {
+  return {
+    id: row.id,
+    ticker: {
+      symbol: row.ticker_symbol,
+      name: row.ticker_name,
+      exchange: row.ticker_exchange,
+      createdAt: row.ticker_created_at.toISOString(),
+    },
+    account: row.account,
+    // pg returns NUMERIC as a string - these two are used in gain/loss
+    // arithmetic client-side, but plain JS numbers are precise enough for
+    // display-grade money math at this scale (no accumulation across many
+    // rows happens server-side).
+    quantity: Number(row.quantity),
+    averageCost: Number(row.average_cost),
+    status: row.status,
+    // A manual override (see setPortfolioManualPrice) always wins over the
+    // automatic cached quote, even if both happen to be populated - setting
+    // one is the whole point of not trusting the automatic side for this
+    // holding. Always GBP, like average_cost (see 009's migration comment).
+    quote:
+      row.manual_price !== null && row.manual_price_updated_at !== null
+        ? {
+            price: Number(row.manual_price),
+            changePercent: 0,
+            currency: 'GBP',
+            asOf: row.manual_price_updated_at.toISOString(),
+            source: 'manual' as const,
+          }
+        : mapQuoteColumns(row),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+const PORTFOLIO_SELECT = `
+  SELECT
+    p.id, p.account, p.quantity, p.average_cost, p.status,
+    p.latest_price, p.latest_price_change_percent, p.latest_price_currency, p.price_updated_at,
+    p.manual_price, p.manual_price_updated_at,
+    p.created_at, p.updated_at,
+    t.symbol AS ticker_symbol, t.name AS ticker_name, t.exchange AS ticker_exchange, t.created_at AS ticker_created_at
+  FROM portfolio_holdings p
+  JOIN tickers t ON t.symbol = p.ticker_symbol
+`;
+
+export async function listPortfolio(
+  opts: { account?: string; status?: 'active' | 'removed' | 'all' } = {}
+): Promise<PortfolioHolding[]> {
+  const status = opts.status ?? 'active';
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (status !== 'all') {
+    params.push(status);
+    clauses.push(`p.status = $${params.length}`);
+  }
+  if (opts.account) {
+    params.push(opts.account);
+    clauses.push(`p.account = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const result = await pool.query<PortfolioRow>(`${PORTFOLIO_SELECT} ${where} ORDER BY p.created_at DESC`, params);
+  return result.rows.map(mapPortfolioHolding);
+}
+
+/**
+ * Adds a holding, or - if this (symbol, account) pair already exists -
+ * overwrites its quantity/average cost in place and reactivates it if it had
+ * been soft-removed. Mirrors `addWatchlistItem`'s upsert idiom, except this
+ * always overwrites quantity/averageCost rather than preserving them
+ * (COALESCE), since re-adding the same holding means "this is now the
+ * position" - not "fill in whatever wasn't set before".
+ */
+export async function upsertPortfolioHolding(input: {
+  symbol: string;
+  name?: string;
+  exchange?: string;
+  account: Account;
+  quantity: number;
+  averageCost: number;
+}): Promise<PortfolioHolding> {
+  return withTransaction(async (client) => {
+    const ticker = await upsertTicker(client, { symbol: input.symbol, name: input.name, exchange: input.exchange });
+    await client.query(
+      `INSERT INTO portfolio_holdings (ticker_symbol, account, quantity, average_cost, status)
+       VALUES ($1, $2, $3, $4, 'active')
+       ON CONFLICT (ticker_symbol, account) DO UPDATE
+         SET quantity = EXCLUDED.quantity,
+             average_cost = EXCLUDED.average_cost,
+             status = 'active',
+             updated_at = now()`,
+      [ticker.symbol, input.account, input.quantity, input.averageCost]
+    );
+    const result = await client.query<PortfolioRow>(
+      `${PORTFOLIO_SELECT} WHERE p.ticker_symbol = $1 AND p.account = $2`,
+      [ticker.symbol, input.account]
+    );
+    return mapPortfolioHolding(result.rows[0]!);
+  });
+}
+
+/** Partial update of an existing holding's quantity and/or average cost - for the frontend's inline-editable table cells. */
+export async function updatePortfolioHolding(
+  symbol: string,
+  account: Account,
+  updates: { quantity?: number; averageCost?: number }
+): Promise<PortfolioHolding | null> {
+  const existing = await pool.query<{ quantity: string; average_cost: string }>(
+    `SELECT quantity, average_cost FROM portfolio_holdings WHERE ticker_symbol = $1 AND account = $2`,
+    [symbol.toUpperCase(), account]
+  );
+  const row = existing.rows[0];
+  if (!row) return null;
+  await pool.query(
+    `UPDATE portfolio_holdings SET quantity = $3, average_cost = $4, updated_at = now()
+     WHERE ticker_symbol = $1 AND account = $2`,
+    [
+      symbol.toUpperCase(),
+      account,
+      updates.quantity ?? Number(row.quantity),
+      updates.averageCost ?? Number(row.average_cost),
+    ]
+  );
+  const full = await pool.query<PortfolioRow>(
+    `${PORTFOLIO_SELECT} WHERE p.ticker_symbol = $1 AND p.account = $2`,
+    [symbol.toUpperCase(), account]
+  );
+  return full.rows[0] ? mapPortfolioHolding(full.rows[0]) : null;
+}
+
+export async function removePortfolioHolding(symbol: string, account: Account): Promise<PortfolioHolding | null> {
+  const result = await pool.query<{ id: string }>(
+    `UPDATE portfolio_holdings SET status = 'removed', updated_at = now()
+     WHERE ticker_symbol = $1 AND account = $2
+     RETURNING id`,
+    [symbol.toUpperCase(), account]
+  );
+  if (result.rowCount === 0) return null;
+  const full = await pool.query<PortfolioRow>(
+    `${PORTFOLIO_SELECT} WHERE p.ticker_symbol = $1 AND p.account = $2`,
+    [symbol.toUpperCase(), account]
+  );
+  return full.rows[0] ? mapPortfolioHolding(full.rows[0]) : null;
+}
+
+/**
+ * Active holdings whose quote hasn't been refreshed within `maxAgeMs` (or
+ * never has). Same shape/purpose as `staleWatchlistPriceSymbols`, but a
+ * holding's ticker can also be on the watch-list - if so, whichever refresh
+ * runs first (this one or the watch-list's) simply primes both rows' cache
+ * columns independently, since each has its own price_updated_at.
+ */
+export async function stalePortfolioPriceSymbols(maxAgeMs: number): Promise<Array<{ symbol: string; exchange: string | null }>> {
+  const result = await pool.query<{ symbol: string; exchange: string | null }>(
+    `SELECT DISTINCT p.ticker_symbol AS symbol, t.exchange
+     FROM portfolio_holdings p
+     JOIN tickers t ON t.symbol = p.ticker_symbol
+     WHERE p.status = 'active'
+       AND p.manual_price IS NULL
+       AND (p.price_updated_at IS NULL OR p.price_updated_at < now() - ($1 || ' milliseconds')::interval)`,
+    [maxAgeMs]
+  );
+  return result.rows;
+}
+
+/**
+ * Overwrites the cached quote for every active holding of `symbol` (there
+ * may be more than one - the same ticker held across multiple accounts).
+ * Deliberately doesn't touch `updated_at` - see `updateWatchlistQuote`.
+ */
+export async function updatePortfolioQuote(symbol: string, quote: WatchlistQuote): Promise<void> {
+  await pool.query(
+    `UPDATE portfolio_holdings
+     SET latest_price = $2, latest_price_change_percent = $3, latest_price_currency = $4, price_updated_at = $5
+     WHERE ticker_symbol = $1`,
+    [symbol.toUpperCase(), quote.price, quote.changePercent, quote.currency, quote.asOf]
+  );
+}
+
+/**
+ * Sets (or, given `null`, clears) a manual price override for one portfolio
+ * holding, addressed by ticker + account (same addressing as
+ * `updatePortfolioHolding`). For a ticker whose automatic price provider
+ * has no reliable live quote - see 009_add_portfolio_manual_price.sql for
+ * the concrete case (GB00B1DSZS09, frozen at a 2019 Yahoo snapshot) - this
+ * takes over display entirely (`mapPortfolioHolding`) and the holding is
+ * skipped by `stalePortfolioPriceSymbols` while it's set, so the automatic
+ * refresh never overwrites it. Passing `null` clears the override and hands
+ * the holding back to automatic pricing on its next refresh.
+ */
+export async function setPortfolioManualPrice(symbol: string, account: Account, price: number | null): Promise<PortfolioHolding | null> {
+  const result = await pool.query<{ id: string }>(
+    // $3 needs an explicit cast: used bare, it appears only inside the CASE
+    // condition below in a way Postgres can't infer a type for on its own
+    // ("could not determine data type of parameter $3", caught by testing
+    // this against a real Postgres, not just by review) - casting pins it
+    // down for both usages.
+    `UPDATE portfolio_holdings
+     SET manual_price = $3::numeric, manual_price_updated_at = CASE WHEN $3::numeric IS NULL THEN NULL ELSE now() END
+     WHERE ticker_symbol = $1 AND account = $2
+     RETURNING id`,
+    [symbol.toUpperCase(), account, price]
+  );
+  if (result.rowCount === 0) return null;
+  const full = await pool.query<PortfolioRow>(`${PORTFOLIO_SELECT} WHERE p.ticker_symbol = $1 AND p.account = $2`, [
+    symbol.toUpperCase(),
+    account,
+  ]);
+  return full.rows[0] ? mapPortfolioHolding(full.rows[0]) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -639,17 +892,25 @@ export async function listNews(opts: { tickerSymbol?: string; limit?: number } =
   return result.rows.map(mapNewsItem);
 }
 
-/** Symbols on the active watch-list whose news hasn't been fetched within `maxAgeMs`. */
-export async function staleWatchlistSymbols(maxAgeMs: number): Promise<string[]> {
+/**
+ * Symbols worth fetching news for whose news hasn't been fetched within
+ * `maxAgeMs` - the union of active watch-list tickers and active portfolio
+ * holdings (a ticker you own but never got round to watching should still
+ * surface headlines, and vice versa; `UNION` dedupes one that's both).
+ */
+export async function staleNewsSymbols(maxAgeMs: number): Promise<string[]> {
   const result = await pool.query<{ symbol: string }>(
-    `SELECT w.ticker_symbol AS symbol
-     FROM watchlist_items w
-     WHERE w.status = 'active'
-       AND NOT EXISTS (
-         SELECT 1 FROM news_items n
-         WHERE n.ticker_symbol = w.ticker_symbol
-           AND n.fetched_at > now() - ($1 || ' milliseconds')::interval
-       )`,
+    `SELECT tracked.symbol
+     FROM (
+       SELECT ticker_symbol AS symbol FROM watchlist_items WHERE status = 'active'
+       UNION
+       SELECT ticker_symbol AS symbol FROM portfolio_holdings WHERE status = 'active'
+     ) tracked
+     WHERE NOT EXISTS (
+       SELECT 1 FROM news_items n
+       WHERE n.ticker_symbol = tracked.symbol
+         AND n.fetched_at > now() - ($1 || ' milliseconds')::interval
+     )`,
     [maxAgeMs]
   );
   return result.rows.map((r) => r.symbol);

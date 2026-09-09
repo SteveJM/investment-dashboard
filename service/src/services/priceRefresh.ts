@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { staleWatchlistPriceSymbols, updateWatchlistQuote } from '../db/queries.js';
+import { stalePortfolioPriceSymbols, staleWatchlistPriceSymbols, updatePortfolioQuote, updateWatchlistQuote } from '../db/queries.js';
 import { getPriceProvider } from '../providers/prices.js';
 
 // The real provider (yahoo-finance2, an unofficial Yahoo Finance client) is
@@ -28,6 +28,28 @@ export async function refreshStaleWatchlistPrices(): Promise<void> {
         await updateWatchlistQuote(symbol, quote);
       } catch (err) {
         // A single provider failure shouldn't break the whole watch-list.
+        console.error(`[prices] failed to refresh ${symbol}:`, err);
+      }
+    })
+  );
+}
+
+/**
+ * Same as `refreshStaleWatchlistPrices`, but for portfolio holdings' cached
+ * quotes. A separate function (rather than folding into the one above)
+ * because the two are independent by design (see task #12's queries.ts
+ * comment) - a symbol can be stale on one and fresh on the other.
+ */
+export async function refreshStalePortfolioPrices(): Promise<void> {
+  const stale = await stalePortfolioPriceSymbols(PRICE_STALE_MS);
+  if (stale.length === 0) return;
+
+  await Promise.all(
+    stale.map(async ({ symbol, exchange }) => {
+      try {
+        const quote = await priceProvider.getQuote(symbol, exchange);
+        await updatePortfolioQuote(symbol, quote);
+      } catch (err) {
         console.error(`[prices] failed to refresh ${symbol}:`, err);
       }
     })

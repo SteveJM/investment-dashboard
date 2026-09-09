@@ -40,6 +40,11 @@ export interface WatchlistQuote {
   changePercent: number;
   currency: string;
   asOf: string;
+  // Only ever set (to 'manual') on a portfolio holding whose price was set
+  // by hand via api.portfolio.setManualPrice - a watch-list quote is always
+  // automatic, so this stays undefined there. See PortfolioPage's
+  // ManualPriceCell for where this is used.
+  source?: 'auto' | 'manual';
 }
 
 export interface WatchlistItem {
@@ -53,6 +58,18 @@ export interface WatchlistItem {
   quote: WatchlistQuote | null;
   sourceArticle: { id: string; title: string; slug: string } | null;
   addedAt: string;
+  updatedAt: string;
+}
+
+export interface PortfolioHolding {
+  id: string;
+  ticker: Ticker;
+  account: Account;
+  quantity: number;
+  averageCost: number;
+  status: 'active' | 'removed';
+  quote: WatchlistQuote | null;
+  createdAt: string;
   updatedAt: string;
 }
 

@@ -14,10 +14,9 @@ src/
     queries.ts         all reads/writes - shared by REST routes and MCP tools
   providers/
     prices.ts          pluggable price provider - real (yahoo-finance2) + mock implementations
-    news.ts             pluggable news provider - real (yahoo-finance2) + mock implementations
+    news.ts             pluggable news provider (mock implementation only, for now)
   services/
     newsRefresh.ts       refreshes stale watch-list news from the news provider
-    priceRefresh.ts      refreshes stale watch-list quotes from the price provider
   api/
     auth.ts              bearer-token auth middleware
     routes.ts            REST endpoints, mounted under /api
@@ -48,16 +47,27 @@ connector for your weekly research scheduled task - use that URL with the
 
 ## MCP tools exposed
 
-| Tool                   | Purpose                                                                 |
-|-------------------------|--------------------------------------------------------------------------|
-| `create_article`        | Publish a research article; optionally references tickers (adding them to the watch-list) and flags calendar dates - all in one transaction |
-| `add_watchlist_item`    | Add/update a ticker on the watch-list                                   |
-| `remove_watchlist_item` | Soft-remove a ticker from the watch-list                                |
-| `add_calendar_event`    | Flag a notable date (earnings, dividend, macro, catalyst, other)        |
-| `list_watchlist`        | List current watch-list items                                           |
-| `list_upcoming_events`  | List calendar events in a date range (defaults to next 30 days)         |
-| `search_articles`       | Search past articles by title/summary/body                              |
-| `get_article`           | Fetch a single article by slug                                          |
+Full input schemas, return shapes, upsert/soft-delete semantics, and
+worked examples for every tool below are in **[`MCP.md`](./MCP.md)** - this
+table is just an index.
+
+| Tool                        | Purpose                                                                 |
+|------------------------------|--------------------------------------------------------------------------|
+| `create_article`             | Publish a research article; optionally references tickers (adding them to the watch-list) and flags calendar dates - all in one transaction |
+| `search_articles`            | Search past articles by title/summary/body                              |
+| `get_article`                | Fetch a single article by slug                                          |
+| `add_watchlist_item`         | Add/update a ticker on the watch-list (upsert preserves omitted fields)  |
+| `set_watchlist_account`      | Set/clear which account a watch-list item relates to                    |
+| `set_watchlist_buy_below`    | Set/clear a watch-list item's target buy-below price                    |
+| `remove_watchlist_item`      | Soft-remove a ticker from the watch-list                                |
+| `list_watchlist`             | List current watch-list items (triggers an opportunistic price refresh) |
+| `add_portfolio_holding`      | Add/overwrite a portfolio holding for a (ticker, account) pair          |
+| `set_portfolio_holding`      | Partially update a holding's quantity and/or average cost               |
+| `remove_portfolio_holding`   | Soft-remove a holding from one account                                  |
+| `set_portfolio_manual_price` | Set/clear a manual price override for a holding Yahoo can't quote reliably |
+| `list_portfolio`             | List current portfolio holdings (triggers an opportunistic price refresh) |
+| `add_calendar_event`         | Flag a notable date (earnings, dividend, macro, catalyst, other)        |
+| `list_upcoming_events`       | List calendar events in a date range (defaults to next 30 days)         |
 
 ## Market data / news providers
 
@@ -79,34 +89,11 @@ could rate-limit or change without notice. Set `PRICE_PROVIDER=mock` to
 fall back to `MockPriceProvider` (deterministic fake GBP data, no network
 calls) for offline dev/demo.
 
-**News** defaults to `yahoo` (`YahooFinanceNewsProvider`) - real headlines
-with real article links via the same `yahoo-finance2` package's `search()`
-endpoint, given the ticker's company name (falling back to its bare symbol).
-It aggregates whichever outlets Yahoo Finance itself surfaces for that
-company (Reuters, AP, Bloomberg, MarketWatch, Motley Fool, etc, via each
-item's `publisher`) rather than pulling from one curated source - there's no
-summary/snippet in Yahoo's response, so `NewsHeadline.summary` is left unset
-for this provider. Same unofficial-API caveats as prices apply, so
-`services/newsRefresh.ts` also only refreshes each ticker every few hours.
-Set `NEWS_PROVIDER=mock` to fall back to `MockNewsProvider` (deterministic
-placeholder headlines, no network calls) for offline dev/demo. To wire in a
-different real source instead (NewsAPI, Finnhub, etc.), implement
-`NewsProvider`, add a `case` to `getNewsProvider()`, and set `NEWS_PROVIDER=`
-- no other code needs to change. Same pattern for a different real price
-source later (Alpha Vantage, Polygon, etc.) alongside or instead of `yahoo`.
-
-## Accounts
-
-Which accounts a watch-list item can be tagged against is deployment-specific
-(whose ISAs/pensions this dashboard actually tracks), so it's the `ACCOUNTS`
-env var - comma-separated, e.g. `ISA,Taxable,Pension` (the
-default). Validated non-empty at startup; both the REST/MCP request schemas
-and `GET /api/accounts` (which the frontend's dropdowns/filters are built
-from, rather than keeping their own copy) are built from this same list.
-There's no DB-level constraint on the value any more (see
-`database/README.md`'s `007_relax_watchlist_account_constraint.sql`) -
-validation lives entirely here, so changing `ACCOUNTS` and restarting the
-service is enough; no migration needed.
+**News** still only ships a mock. Implement `NewsProvider` against a real
+API (NewsAPI, Finnhub, etc.), add a `case` to `getNewsProvider()`, and set
+`NEWS_PROVIDER=` - no other code needs to change. Same pattern to add a
+different real price source later (Alpha Vantage, Polygon, etc.) alongside
+or instead of `yahoo`.
 
 ## Auth
 

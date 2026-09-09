@@ -32,6 +32,12 @@ Postgres 16 image with the Investment Dashboard schema baked in.
   rather than hard-coded, so validation moved to the application layer.
   Applied automatically on a fresh volume; for an already-running deployment,
   apply it by hand (see below).
+- `init/008_add_portfolio_holdings.sql` - creates `portfolio_holdings`
+  (ticker, account, quantity, average cost, status, plus the same
+  quote-caching columns as `watchlist_items`) - one row per (ticker, account)
+  pair, tracked independently of the watch-list. Applied automatically on a
+  fresh volume; for an already-running deployment, apply it by hand (see
+  below).
 
 ## How migrations run
 

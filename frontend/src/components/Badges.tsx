@@ -58,9 +58,17 @@ export function QuoteCell({ quote, buyBelow }: { quote: WatchlistQuote | null; b
       <div className={isCandidate ? 'quote-price quote-buy-candidate' : 'quote-price'} title={isCandidate ? 'At or below your buy-below target' : undefined}>
         {formatQuotePrice(quote.price, quote.currency)}
       </div>
-      <div className={changeClass} style={{ fontSize: 12 }}>
-        {formatChangePercent(quote.changePercent)}
-      </div>
+      {quote.source === 'manual' ? (
+        // A manual price has no day-change to show (see setPortfolioManualPrice) -
+        // show when it was set instead, so it reads as "not live" rather than frozen.
+        <div className="muted" style={{ fontSize: 12 }} title="Set by hand, not from the automatic price provider">
+          manual · {new Date(quote.asOf).toLocaleDateString()}
+        </div>
+      ) : (
+        <div className={changeClass} style={{ fontSize: 12 }}>
+          {formatChangePercent(quote.changePercent)}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { Account, Article, ArticleSummary, CalendarEvent, NewsItem, Ticker, WatchlistItem } from './types';
+import type { Account, Article, ArticleSummary, CalendarEvent, NewsItem, PortfolioHolding, Ticker, WatchlistItem } from './types';
 
 // In the production/Docker build these are unset, so requests go to
 // same-origin relative paths (e.g. `/api/tickers`) and nginx proxies them
@@ -75,6 +75,28 @@ export const api = {
     setBuyBelow: (symbol: string, buyBelow: number | null) =>
       request<WatchlistItem>(`/api/watchlist/${symbol}/buy-below`, { method: 'PATCH', body: JSON.stringify({ buyBelow }) }),
     remove: (symbol: string) => request<WatchlistItem>(`/api/watchlist/${symbol}`, { method: 'DELETE' }),
+  },
+  portfolio: {
+    list: (params: { account?: string; status?: 'active' | 'removed' | 'all' } = {}) =>
+      request<PortfolioHolding[]>(`/api/portfolio${qs(params)}`),
+    add: (input: { symbol: string; name?: string; exchange?: string; account: Account; quantity: number; averageCost: number }) =>
+      request<PortfolioHolding>('/api/portfolio', { method: 'POST', body: JSON.stringify(input) }),
+    update: (symbol: string, account: Account, input: { quantity?: number; averageCost?: number }) =>
+      request<PortfolioHolding>(`/api/portfolio/${encodeURIComponent(symbol)}/${encodeURIComponent(account)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
+    remove: (symbol: string, account: Account) =>
+      request<PortfolioHolding>(`/api/portfolio/${encodeURIComponent(symbol)}/${encodeURIComponent(account)}`, {
+        method: 'DELETE',
+      }),
+    // price: null clears the override and goes back to the automatic
+    // (Yahoo Finance) quote - see the service's setPortfolioManualPrice.
+    setManualPrice: (symbol: string, account: Account, price: number | null) =>
+      request<PortfolioHolding>(`/api/portfolio/${encodeURIComponent(symbol)}/${encodeURIComponent(account)}/manual-price`, {
+        method: 'PATCH',
+        body: JSON.stringify({ price }),
+      }),
   },
   calendar: {
     list: (params: { from?: string; to?: string; ticker?: string } = {}) =>

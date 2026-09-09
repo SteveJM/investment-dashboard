@@ -9,16 +9,21 @@ import {
   listArticles,
   listCalendarEvents,
   listNews,
+  listPortfolio,
   listTickers,
   listWatchlist,
   markNewsItemRead,
+  removePortfolioHolding,
   removeWatchlistItem,
   searchArticles,
+  setPortfolioManualPrice,
   setWatchlistAccount,
   setWatchlistBuyBelow,
+  updatePortfolioHolding,
+  upsertPortfolioHolding,
 } from '../db/queries.js';
-import { refreshStaleWatchlistNews } from '../services/newsRefresh.js';
-import { refreshStaleWatchlistPrices } from '../services/priceRefresh.js';
+import { refreshStaleNews } from '../services/newsRefresh.js';
+import { refreshStalePortfolioPrices, refreshStaleWatchlistPrices } from '../services/priceRefresh.js';
 import { requireApiKey } from './auth.js';
 
 const convictionSchema = z.enum(['high', 'medium', 'low']);
@@ -44,6 +49,32 @@ const setAccountSchema = z.object({
 const setBuyBelowSchema = z.object({
   buyBelow: buyBelowSchema.nullable(),
 });
+
+const quantitySchema = z.number().positive();
+const averageCostSchema = z.number().positive();
+const manualPriceSchema = z.number().positive();
+
+const setManualPriceSchema = z.object({
+  price: manualPriceSchema.nullable(),
+});
+
+const createPortfolioHoldingSchema = z.object({
+  symbol: z.string().min(1),
+  name: z.string().min(1).optional(),
+  exchange: z.string().optional(),
+  account: accountSchema,
+  quantity: quantitySchema,
+  averageCost: averageCostSchema,
+});
+
+const updatePortfolioHoldingSchema = z
+  .object({
+    quantity: quantitySchema.optional(),
+    averageCost: averageCostSchema.optional(),
+  })
+  .refine((v) => v.quantity !== undefined || v.averageCost !== undefined, {
+    message: 'Provide quantity and/or averageCost',
+  });
 
 const createCalendarEventSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD'),
@@ -146,6 +177,64 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return item;
   });
 
+  app.get('/api/portfolio', async (req) => {
+    const query = req.query as { account?: string; status?: string };
+    const status = z.enum(['active', 'removed', 'all']).default('active').parse(query.status);
+    await refreshStalePortfolioPrices();
+    return listPortfolio({ account: query.account, status });
+  });
+
+  // Upsert-create: adding a holding for a (symbol, account) pair that
+  // already exists overwrites its quantity/average cost rather than
+  // erroring, mirroring add_watchlist_item's idiom.
+  app.post('/api/portfolio', async (req, reply) => {
+    const body = createPortfolioHoldingSchema.parse(req.body);
+    const holding = await upsertPortfolioHolding(body);
+    reply.code(201);
+    return holding;
+  });
+
+  // No "change account" endpoint, unlike the watch-list's set-account route -
+  // account is part of a holding's identity here (its uniqueness key), so
+  // moving a position to a different account is modeled as remove-then-add
+  // (an explicit transfer), not an in-place relabel.
+  app.patch('/api/portfolio/:symbol/:account', async (req, reply) => {
+    const { symbol, account } = req.params as { symbol: string; account: string };
+    const body = updatePortfolioHoldingSchema.parse(req.body);
+    const holding = await updatePortfolioHolding(symbol, account, body);
+    if (!holding) {
+      reply.code(404);
+      return { error: `No portfolio holding for ${symbol} in "${account}"` };
+    }
+    return holding;
+  });
+
+  app.delete('/api/portfolio/:symbol/:account', async (req, reply) => {
+    const { symbol, account } = req.params as { symbol: string; account: string };
+    const holding = await removePortfolioHolding(symbol, account);
+    if (!holding) {
+      reply.code(404);
+      return { error: `No portfolio holding for ${symbol} in "${account}"` };
+    }
+    return holding;
+  });
+
+  // Overrides the automatic (Yahoo Finance) price with a value supplied by
+  // hand, for a ticker the automatic provider has no reliable quote for -
+  // see 009_add_portfolio_manual_price.sql. `price: null` clears it back to
+  // automatic, same nullable-to-clear idiom as the watch-list's account/
+  // buy-below routes above.
+  app.patch('/api/portfolio/:symbol/:account/manual-price', async (req, reply) => {
+    const { symbol, account } = req.params as { symbol: string; account: string };
+    const { price } = setManualPriceSchema.parse(req.body);
+    const holding = await setPortfolioManualPrice(symbol, account, price);
+    if (!holding) {
+      reply.code(404);
+      return { error: `No portfolio holding for ${symbol} in "${account}"` };
+    }
+    return holding;
+  });
+
   app.get('/api/calendar', async (req) => {
     const query = req.query as { from?: string; to?: string; ticker?: string };
     return listCalendarEvents({ from: query.from, to: query.to, tickerSymbol: query.ticker });
@@ -183,7 +272,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/news', async (req) => {
     const query = req.query as { ticker?: string; limit?: string };
-    await refreshStaleWatchlistNews();
+    await refreshStaleNews();
     return listNews({ tickerSymbol: query.ticker, limit: query.limit ? Number(query.limit) : undefined });
   });
 

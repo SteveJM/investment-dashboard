@@ -109,6 +109,21 @@ function toYahooSymbol(symbol: string, exchange?: string | null): string {
  *   pound GBP values.
  * - **Exchange guessing.** Yahoo needs a per-exchange suffix (".L" for
  *   LSE/AIM); see `toYahooSymbol` above for how that's picked.
+ * - **Some symbols are just frozen.** Yahoo's mutual-fund NAV coverage for
+ *   less-liquid UK OEICs can stop updating without any error - `quote()`
+ *   keeps returning the same `regularMarketPrice`/`regularMarketTime`
+ *   snapshot from years ago forever. `getQuote` below deliberately stamps
+ *   `asOf` with the actual fetch time rather than trusting
+ *   `q.regularMarketTime` for exactly this reason: `stalePortfolioPriceSymbols`
+ *   /`staleWatchlistPriceSymbols` decide what to refresh next by comparing
+ *   `price_updated_at` against "now", so if `asOf` echoed Yahoo's own (long
+ *   past) market time, a frozen symbol would look permanently stale and get
+ *   silently re-fetched - and re-cache the same wrong number - on every
+ *   single request forever, with nothing to show it was even trying. This
+ *   still doesn't make the *price* current for a genuinely frozen symbol
+ *   (see the portfolio holding's manual-price override,
+ *   `setPortfolioManualPrice`, for that case) - it only stops the refresh
+ *   loop from being invisible about it.
  *
  * NOT independently network-verified against live Yahoo data during
  * development - the sandbox this was built in blocks outbound requests to
@@ -137,7 +152,9 @@ export class YahooFinancePriceProvider implements PriceProvider {
       price: Math.round(price * 100) / 100,
       currency,
       changePercent: q.regularMarketChangePercent != null ? Math.round(q.regularMarketChangePercent * 100) / 100 : 0,
-      asOf: (q.regularMarketTime ?? new Date()).toISOString(),
+      // The time WE fetched this, not Yahoo's own `regularMarketTime` - see
+      // this class's doc comment above ("Some symbols are just frozen").
+      asOf: new Date().toISOString(),
     };
   }
 

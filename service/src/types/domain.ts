@@ -42,6 +42,12 @@ export interface WatchlistQuote {
   changePercent: number;
   currency: string;
   asOf: string;
+  // Only ever 'manual' on a portfolio holding (see PortfolioHolding below) -
+  // a watch-list quote is always automatic, so this is left undefined there.
+  // Marks a quote that came from setPortfolioManualPrice rather than the
+  // automatic price provider, so the frontend can show it differently and
+  // offer to clear it back to automatic.
+  source?: 'auto' | 'manual';
 }
 
 export interface WatchlistItem {
@@ -55,6 +61,21 @@ export interface WatchlistItem {
   quote: WatchlistQuote | null;
   sourceArticle: { id: string; title: string; slug: string } | null;
   addedAt: string;
+  updatedAt: string;
+}
+
+export interface PortfolioHolding {
+  id: string;
+  ticker: Ticker;
+  account: Account;
+  quantity: number;
+  averageCost: number;
+  status: WatchlistStatus;
+  // Same shape as a watch-list quote (see `WatchlistQuote` above) - reused
+  // as-is rather than duplicated, refreshed the same opportunistic way (see
+  // services/priceRefresh.ts).
+  quote: WatchlistQuote | null;
+  createdAt: string;
   updatedAt: string;
 }
 

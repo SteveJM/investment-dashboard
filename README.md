@@ -23,8 +23,8 @@ Each folder has its own README with more detail.
 ## What it does
 
 - **Calendar**: notable dates flagged by research articles (earnings, dividends, macro, catalysts).
-- **Watch-list**: tickers surfaced by research articles (or added manually), each showing an account tag, an optional "buy below" target price, and a latest-price quote in GBP - real, free, delayed quotes via `yahoo-finance2` by default (`service/providers/prices.ts`), refreshed every few hours per ticker.
-- **News**: recent headlines for everything on the watch-list - real articles with real links via `yahoo-finance2`'s search endpoint by default (`service/providers/news.ts`), refreshed every few hours per ticker. Each headline is tracked read/unread - clicking through marks it read, and read items render paled-out.
+- **Watch-list**: tickers surfaced by research articles (or added manually).
+- **News**: recent headlines for everything on the watch-list (currently a mock provider - see `service/providers/news.ts`).
 - **Articles**: the research write-ups themselves. Ticker symbols and calendar entries link back to the article that produced them.
 
 Research articles are meant to be written by Claude via the **MCP server**
@@ -51,17 +51,16 @@ want it.
 
 ## Connecting Claude to the MCP server
 
-Full protocol details (auth, session handshake, every tool's input schema) are in [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) - written for handing to another system/agent that needs to populate this dashboard programmatically.
-
 Point a Claude session - most usefully a scheduled weekly research task - at
 `http://<host>:4001/mcp` as a custom MCP connector, with header
 `Authorization: Bearer <API_KEY>` (same value as `service`'s `API_KEY` env
 var). From there it can call `create_article` to publish a research write-up
-that automatically populates the watch-list and calendar, or use the other
-tools (`add_watchlist_item`, `add_calendar_event`, `list_watchlist`,
-`list_upcoming_events`, `search_articles`, `get_article`,
-`remove_watchlist_item`) directly. See `service/README.md` for the full tool
-list and descriptions.
+that automatically populates the watch-list and calendar, or use any of the
+other 14 tools directly - covering the watch-list, the portfolio (adding
+holdings, adjusting quantity/cost, manual price overrides), and the
+calendar. See **[`service/MCP.md`](./service/MCP.md)** for the full,
+detailed reference (every tool's input schema, return shape, and behavior
+notes) - `service/README.md` has a short index.
 
 If this ever runs somewhere Claude reaches over the public internet, put it
 behind TLS (e.g. an ALB/CloudFront in front of it on AWS) - the bearer token
@@ -69,14 +68,11 @@ alone is not enough on an unencrypted connection.
 
 ## Notes on what's stubbed
 
-Both prices and news now default to real (free, unofficial) sources via
-`yahoo-finance2`, the same underlying data `yfinance` uses in Python - see
-`service/README.md` for caveats (delayed, no SLA, LSE pence-vs-pounds handling
-for prices; whichever outlet Yahoo Finance itself surfaces for news, not a
-curated source list). Set `PRICE_PROVIDER=mock` / `NEWS_PROVIDER=mock` to fall
-back to deterministic fake data with no network calls for either. Swapping in
-a different real source is a single file (implement the interface) plus one
-env var (`PRICE_PROVIDER` / `NEWS_PROVIDER`).
+Market prices and news are both behind pluggable provider interfaces
+(`service/src/providers/`) with only a mock implementation shipped, per
+project decision to wire in a real data source later without re-architecting.
+Swapping one in is a single file (implement the interface) plus one env var
+(`PRICE_PROVIDER` / `NEWS_PROVIDER`).
 
 ## Deploying beyond docker-compose
 

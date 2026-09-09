@@ -166,6 +166,41 @@ Soft-removes a ticker from the watch-list (history kept, status flips to `remove
 
 Before listing, this refreshes the cached `quote` (see below) for any active item whose quote is missing or over a minute old - so a call to this tool can take slightly longer than the others while that happens, and always reflects a recent price.
 
+### `add_portfolio_holding`
+
+Adds a holding to the portfolio - tickers you actually own, tracked independently of the watch-list (a ticker can be on neither, either, or both). If this (symbol, account) pair already exists, its quantity and average cost are overwritten with the values given here (not merged/preserved like `add_watchlist_item`'s account/buyBelow fields - re-adding a holding means "this is now the position").
+
+```ts
+{ symbol: string; name?: string; exchange?: string; account: string; quantity: number; averageCost: number; }
+// account: one of your configured ACCOUNTS values
+// quantity: number of shares/units held, must be > 0
+// averageCost: average cost per share/unit in GBP, must be > 0
+```
+
+### `set_portfolio_holding`
+
+Updates the quantity and/or average cost of an existing holding, addressed by ticker + account. Unlike `add_portfolio_holding`, only the field(s) given are touched - omit one to leave it as-is.
+
+```ts
+{ symbol: string; account: string; quantity?: number; averageCost?: number; }
+```
+
+### `remove_portfolio_holding`
+
+Soft-removes a portfolio holding (history kept, status flips to `removed`). Addressed by ticker + account, since the same ticker can be held separately across multiple accounts. There's no "change account" tool - moving a holding between accounts is modeled as `remove_portfolio_holding` followed by `add_portfolio_holding` under the new account (an explicit transfer), since account is part of a holding's identity here.
+
+```ts
+{ symbol: string; account: string; }
+```
+
+### `list_portfolio`
+
+```ts
+{ account?: string; status?: "active" | "removed" | "all"; }   // status defaults to "active"
+```
+
+Before listing, this refreshes the cached `quote` for any active holding whose quote is missing or over a few hours old - same mechanism as `list_watchlist`'s quote refresh, but tracked independently (a ticker that's both held and watched has two separate cache columns, refreshed on their own schedules).
+
 ### `add_calendar_event`
 
 Same shape as one entry of `create_article`'s `calendarEvents`, plus `ticker` must already exist:
@@ -201,6 +236,7 @@ Same shape as one entry of `create_article`'s `calendarEvents`, plus `ticker` mu
 - **Account is validated against the `ACCOUNTS` env var** (comma-separated, e.g. `ISA,Taxable,Pension` by default - see `service/README.md`) rather than a hard-coded list, so it varies per deployment; any value not in that list is rejected at the API/MCP layer (there's no DB-level constraint any more). Fetch the actual configured list via `GET /api/accounts`. It's a single value per watch-list item, not a list (a ticker can't be tagged against more than one account today).
 - **`buyBelow` is a plain positive number** (no currency field - it's just a target price you set yourself) enforced by a DB constraint (`> 0` or `NULL`). It's a manual reference value the dashboard displays alongside each watch-list item, and the dashboard now highlights an item green when its `quote.price` is at or below `buyBelow`.
 - **Every watch-list item carries a `quote`** - `{ price: number; changePercent: number; currency: string; asOf: string }` or `null` if it hasn't been fetched yet. This is read-only output (there's no tool to set it): it's refreshed opportunistically from the price provider (`service/src/providers/prices.ts`) whenever `list_watchlist` or the REST `/api/watchlist` endpoint is called, throttled to once every few hours per symbol (real quotes, not a live feed - see `service/README.md`). The default provider is `yahoo-finance2` (real, free, delayed quotes; `currency` is `"GBP"` for UK tickers); set `PRICE_PROVIDER=mock` for deterministic fake GBP data with no network calls.
+- **Portfolio holdings are independent of the watch-list** - a ticker can be on neither, either, or both; there's no reference between a `portfolio_holdings` row and a `watchlist_items` row. A holding is keyed on `(ticker_symbol, account)`, not `ticker_symbol` alone - the same ticker can be a distinct position in more than one account, unlike a watch-list item. `quantity` and `averageCost` are plain positive numbers (`averageCost` is GBP, same convention as `buyBelow`); each holding carries its own `quote`, same shape and refresh mechanism as a watch-list item's.
 
 ## Security
 
