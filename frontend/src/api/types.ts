@@ -79,6 +79,7 @@ export interface CalendarEvent {
   title: string;
   description: string | null;
   eventType: CalendarEventType;
+  status: 'active' | 'removed';
   ticker: { symbol: string; name: string } | null;
   sourceArticle: { id: string; title: string; slug: string } | null;
   createdAt: string;

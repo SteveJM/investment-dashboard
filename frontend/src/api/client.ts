@@ -117,8 +117,15 @@ export const api = {
       }),
   },
   calendar: {
-    list: (params: { from?: string; to?: string; ticker?: string } = {}) =>
+    list: (params: { from?: string; to?: string; ticker?: string; status?: 'active' | 'removed' | 'all' } = {}) =>
       request<CalendarEvent[]>(`/api/calendar${qs(params)}`),
+    // Soft-removes a single event by id.
+    remove: (id: string) => request<CalendarEvent>(`/api/calendar/${id}`, { method: 'DELETE' }),
+    // Soft-removes every remaining active event for a ticker in one call
+    // (e.g. clearing out seeded/placeholder dates) - returns whatever was
+    // actually removed, which may be [].
+    removeByTicker: (ticker: string) =>
+      request<CalendarEvent[]>(`/api/calendar${qs({ ticker })}`, { method: 'DELETE' }),
   },
   articles: {
     list: (params: { ticker?: string; q?: string } = {}) => request<ArticleSummary[]>(`/api/articles${qs(params)}`),

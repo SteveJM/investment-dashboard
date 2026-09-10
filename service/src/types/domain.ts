@@ -99,6 +99,7 @@ export interface CalendarEvent {
   title: string;
   description: string | null;
   eventType: CalendarEventType;
+  status: WatchlistStatus;
   ticker: { symbol: string; name: string } | null;
   sourceArticle: { id: string; title: string; slug: string } | null;
   createdAt: string;

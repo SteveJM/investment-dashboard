@@ -19,10 +19,16 @@
  *
  * Or via the npm script (same thing): `npm run backfill-history -- --all`
  *
- * `--all` backfills every ticker already known to the system (anything
- * referenced by the watch-list, portfolio, or an article) - it does not
- * take a symbol that's never been seen before, since there'd be no name/
- * exchange to record for it. Add it via add_watchlist_item,
+ * `--all` backfills every ticker with an *active* watch-list item or
+ * portfolio holding right now (`listTrackedTickers` in queries.ts) - not
+ * every ticker the system has ever heard of. A ticker only ever mentioned
+ * by a past create_article call, or one you've since removed from both the
+ * watch-list and portfolio, will not be included, so a recurring `--all`
+ * job (e.g. a daily cron entry) doesn't keep spending API calls on
+ * positions you no longer track. Use `--symbol=<TICKER>` to backfill
+ * anything else on demand - that mode isn't scoped this way, but it still
+ * requires the symbol to already be known (there'd be no name/exchange to
+ * record for one that isn't) - add it via add_watchlist_item,
  * add_portfolio_holding, or create_article first (see MCP.md), then
  * backfill.
  *
@@ -34,7 +40,7 @@
  */
 
 import { config } from '../config.js';
-import { getTicker, listTickers, upsertPriceHistory } from '../db/queries.js';
+import { getTicker, listTrackedTickers, upsertPriceHistory } from '../db/queries.js';
 import { pool } from '../db/pool.js';
 import { getPriceProvider } from '../providers/prices.js';
 
@@ -87,13 +93,13 @@ async function main(): Promise<void> {
   }
 
   const tickers = args.all
-    ? await listTickers()
+    ? await listTrackedTickers()
     : [await getTicker(args.symbol!)].filter((t): t is NonNullable<typeof t> => t !== null);
 
   if (tickers.length === 0) {
     console.error(
       args.all
-        ? 'No tickers found - nothing to back-fill yet (add one via add_watchlist_item/add_portfolio_holding/create_article first).'
+        ? 'No actively-tracked tickers found - nothing to back-fill (add one to the watch-list/portfolio first, or use --symbol=<TICKER> for a ticker you track outside of those, e.g. one only referenced by an article).'
         : `Ticker "${args.symbol}" isn't known yet - add it via add_watchlist_item, add_portfolio_holding, or create_article first, then back-fill.`
     );
     process.exitCode = 1;

@@ -53,6 +53,12 @@ Postgres 16 image with the Investment Dashboard schema baked in.
   "Generate News Summary" output, plus when it was generated. Applied
   automatically on a fresh volume; for an already-running deployment, apply
   it by hand (see below).
+- `init/012_add_calendar_event_removal.sql` - adds `calendar_events.status`
+  (`'active'`/`'removed'`, defaults `'active'`) - the same soft-delete
+  pattern as `watchlist_items`/`portfolio_holdings`, now usable via the
+  `remove_calendar_event` MCP tool / `DELETE /api/calendar/:id` /
+  `DELETE /api/calendar?ticker=...`. Applied automatically on a fresh
+  volume; for an already-running deployment, apply it by hand (see below).
 
 ## How migrations run
 
@@ -64,8 +70,21 @@ a container starts against an empty `PGDATA` directory**. This means:
 - Existing volume -> init scripts are skipped entirely, even after a
   `docker build`/image update. Add new files numbered after the existing
   ones (e.g. `003_add_x.sql`) and apply them by hand for existing
-  deployments (`psql -f database/init/003_add_x.sql`), or drop the volume in
-  dev.
+  deployments, or drop the volume in dev.
+
+  No local `psql` needed - pipe the file into `psql` running *inside* the
+  already-running `database` container instead (run from wherever
+  `docker-compose.yml` is, with that container up):
+
+  ```bash
+  docker compose exec -T database psql -U investment_dashboard -d investment_dashboard \
+    < database/init/003_add_x.sql
+  ```
+
+  (`-T` disables the pseudo-TTY that `docker compose exec` allocates by
+  default - needed for the stdin redirect above to actually reach `psql`.)
+  If you do have `psql` installed locally, `psql <DATABASE_URL> -f database/init/003_add_x.sql`
+  works the same way, talking to the container over its published `5432` port.
 
 ## Local build/run (standalone, outside compose)
 

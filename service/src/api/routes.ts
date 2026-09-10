@@ -16,6 +16,7 @@ import {
   listTickers,
   listWatchlist,
   markNewsItemRead,
+  removeCalendarEvent,
   removePortfolioHolding,
   removeWatchlistItem,
   searchArticles,
@@ -253,8 +254,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/calendar', async (req) => {
-    const query = req.query as { from?: string; to?: string; ticker?: string };
-    return listCalendarEvents({ from: query.from, to: query.to, tickerSymbol: query.ticker });
+    const query = req.query as { from?: string; to?: string; ticker?: string; status?: string };
+    const status = z.enum(['active', 'removed', 'all']).default('active').parse(query.status);
+    return listCalendarEvents({ from: query.from, to: query.to, tickerSymbol: query.ticker, status });
   });
 
   app.post('/api/calendar', async (req, reply) => {
@@ -262,6 +264,32 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const event = await addCalendarEvent(body);
     reply.code(201);
     return event;
+  });
+
+  // Bulk removal by ticker (e.g. clearing out seeded/placeholder dates for a
+  // ticker you no longer follow) - the query-param form matches the GET
+  // route's own filtering idiom above, rather than a request body on a
+  // DELETE. `ticker` is required here; DELETE /api/calendar/:id (below)
+  // covers the single-event case. Soft delete, like every other removal in
+  // this API - returns whatever was actually removed, `[]` (200, not an
+  // error) if nothing matched.
+  app.delete('/api/calendar', async (req, reply) => {
+    const { ticker } = req.query as { ticker?: string };
+    if (!ticker) {
+      reply.code(400);
+      return { error: 'ticker query parameter is required' };
+    }
+    return removeCalendarEvent({ ticker });
+  });
+
+  app.delete('/api/calendar/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const removed = await removeCalendarEvent({ id });
+    if (removed.length === 0) {
+      reply.code(404);
+      return { error: `No active calendar event with id ${id}` };
+    }
+    return removed[0];
   });
 
   app.get('/api/articles', async (req) => {

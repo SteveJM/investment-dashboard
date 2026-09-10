@@ -9,6 +9,7 @@ import {
   listCalendarEvents,
   listPortfolio,
   listWatchlist,
+  removeCalendarEvent,
   removePortfolioHolding,
   removeWatchlistItem,
   searchArticles,
@@ -316,20 +317,50 @@ export function createInvestmentDashboardMcpServer(): McpServer {
     'list_upcoming_events',
     {
       title: 'List upcoming calendar events',
-      description: 'Lists calendar events in a date range. Defaults to the next 30 days if no range is given.',
+      description: 'Lists calendar events in a date range (default: active only). Defaults to the next 30 days if no range is given.',
       inputSchema: {
         from: z.string().optional().describe('YYYY-MM-DD, defaults to today'),
         to: z.string().optional().describe('YYYY-MM-DD, defaults to 30 days from today'),
         ticker: z.string().optional(),
+        status: z.enum(['active', 'removed', 'all']).optional(),
       },
     },
-    async ({ from, to, ticker }) => {
+    async ({ from, to, ticker, status }) => {
       const today = new Date();
       const defaultFrom = today.toISOString().slice(0, 10);
       const defaultTo = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       return jsonResult(
-        await listCalendarEvents({ from: from ?? defaultFrom, to: to ?? defaultTo, tickerSymbol: ticker })
+        await listCalendarEvents({
+          from: from ?? defaultFrom,
+          to: to ?? defaultTo,
+          tickerSymbol: ticker,
+          status: status ?? 'active',
+        })
       );
+    }
+  );
+
+  server.registerTool(
+    'remove_calendar_event',
+    {
+      title: 'Remove calendar event',
+      description:
+        'Marks a calendar event as removed (soft delete - history is kept). Addressed either by its own id (a ' +
+        'single event), or by ticker to remove every remaining active event for that ticker in one call (e.g. ' +
+        'clearing out seeded/placeholder dates for a ticker you no longer follow). Provide exactly one of the two.',
+      inputSchema: {
+        id: z.string().optional().describe('Remove this one event'),
+        ticker: z.string().optional().describe('Remove every active event for this ticker'),
+      },
+    },
+    async ({ id, ticker }) => {
+      if (!id && !ticker) return errorResult('Provide either id or ticker');
+      if (id && ticker) return errorResult('Provide only one of id or ticker, not both');
+      const removed = await removeCalendarEvent(id ? { id } : { ticker: ticker! });
+      if (removed.length === 0) {
+        return errorResult(id ? `No active calendar event with id ${id}` : `No active calendar events for ${ticker}`);
+      }
+      return jsonResult(removed);
     }
   );
 

@@ -69,7 +69,8 @@ table is just an index.
 | `set_portfolio_manual_price` | Set/clear a manual price override for a holding Yahoo can't quote reliably |
 | `list_portfolio`             | List current portfolio holdings (triggers an opportunistic price refresh) |
 | `add_calendar_event`         | Flag a notable date (earnings, dividend, macro, catalyst, other)        |
-| `list_upcoming_events`       | List calendar events in a date range (defaults to next 30 days)         |
+| `list_upcoming_events`       | List calendar events in a date range (defaults to next 30 days, active only) |
+| `remove_calendar_event`      | Soft-remove a calendar event, by id or in bulk by ticker                 |
 
 ## Market data / news providers
 
@@ -116,8 +117,16 @@ service container so it shares the container's `DATABASE_URL` and
 # One ticker, default lookback (365 days)
 docker compose exec service node dist/cli/backfillHistory.js --symbol=AAL
 
-# Every ticker already on the watch-list/portfolio (skips creating new ones)
+# Every ticker with an *active* watch-list item or portfolio holding
+# right now - not one only ever mentioned in a past article, and not one
+# you've since removed from both
 docker compose exec service node dist/cli/backfillHistory.js --all
+
+# A short daily top-up rather than a full re-backfill - safe to run on a
+# schedule (e.g. a cron entry after market close) since existing dates are
+# overwritten in place, not duplicated. A few days' buffer, not just 1,
+# covers a run that lands right after a weekend or market holiday.
+docker compose exec service node dist/cli/backfillHistory.js --all --days=3
 
 # Custom lookback
 docker compose exec service node dist/cli/backfillHistory.js --symbol=AAL --days=90
@@ -127,7 +136,12 @@ It upserts on `(ticker_symbol, price_date)`, so re-running it (e.g. on a
 schedule) is safe and just refreshes/extends what's there rather than
 duplicating rows. With `--all`, a failure fetching one ticker is logged and
 skipped rather than aborting the rest; the process exits non-zero if any
-ticker failed.
+ticker failed. `--all`'s scope is deliberately narrower than "every ticker
+the system has ever heard of" (`listTrackedTickers` in `src/db/queries.ts`)
+so a recurring job doesn't keep spending API calls on a ticker a past
+research article mentioned once, or one you've since removed from both the
+watch-list and portfolio - use `--symbol=<TICKER>` to backfill one of those
+on demand instead.
 
 Run it against `PRICE_PROVIDER=mock` (the default in local dev without a
 `.env`) to backfill deterministic fake data with no network calls - useful

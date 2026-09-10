@@ -109,6 +109,33 @@ export async function listTickers(): Promise<Ticker[]> {
   return result.rows.map(mapTicker);
 }
 
+/**
+ * Tickers with an *active* watch-list item or portfolio holding right now -
+ * deliberately narrower than `listTickers`, which returns every ticker ever
+ * referenced anywhere (including one only ever mentioned by a past
+ * `create_article` call, with no watch-list/portfolio row at all - or one
+ * whose only row is soft-removed). Used by the `backfill-history` CLI's
+ * `--all` mode (see src/cli/backfillHistory.ts) so a recurring backfill job
+ * only spends API calls on positions you actually still track, rather than
+ * every ticker that's ever been mentioned in a research note or since
+ * removed - `--symbol=<TICKER>` remains the way to backfill anything else
+ * on demand.
+ */
+export async function listTrackedTickers(): Promise<Ticker[]> {
+  // EXISTS rather than a JOIN, deliberately - t.symbol is tickers' primary
+  // key, so this can never return the same ticker twice even if it has
+  // several active watchlist/portfolio rows (e.g. held in multiple
+  // accounts), unlike a naive join which would need its own DISTINCT.
+  const result = await pool.query<TickerRow>(
+    `SELECT t.*
+     FROM tickers t
+     WHERE EXISTS (SELECT 1 FROM watchlist_items w WHERE w.ticker_symbol = t.symbol AND w.status = 'active')
+        OR EXISTS (SELECT 1 FROM portfolio_holdings p WHERE p.ticker_symbol = t.symbol AND p.status = 'active')
+     ORDER BY t.symbol`
+  );
+  return result.rows.map(mapTicker);
+}
+
 /** Single-ticker lookup - mainly for the backfill CLI, which needs a ticker's stored `exchange` before it can ask a price provider for history. */
 export async function getTicker(symbol: string): Promise<Ticker | null> {
   const result = await pool.query<TickerRow>('SELECT * FROM tickers WHERE symbol = $1', [symbol.toUpperCase()]);
@@ -813,6 +840,7 @@ interface CalendarEventRow {
   title: string;
   description: string | null;
   event_type: CalendarEventType;
+  status: 'active' | 'removed';
   created_at: Date;
   ticker_symbol: string | null;
   ticker_name: string | null;
@@ -828,6 +856,7 @@ function mapCalendarEvent(row: CalendarEventRow): CalendarEvent {
     title: row.title,
     description: row.description,
     eventType: row.event_type,
+    status: row.status,
     ticker: row.ticker_symbol ? { symbol: row.ticker_symbol, name: row.ticker_name! } : null,
     sourceArticle: row.source_article_id
       ? { id: row.source_article_id, title: row.source_article_title!, slug: row.source_article_slug! }
@@ -838,7 +867,7 @@ function mapCalendarEvent(row: CalendarEventRow): CalendarEvent {
 
 const CALENDAR_SELECT = `
   SELECT
-    c.id, c.event_date, c.title, c.description, c.event_type, c.created_at,
+    c.id, c.event_date, c.title, c.description, c.event_type, c.status, c.created_at,
     t.symbol AS ticker_symbol, t.name AS ticker_name,
     a.id AS source_article_id, a.title AS source_article_title, a.slug AS source_article_slug
   FROM calendar_events c
@@ -846,9 +875,16 @@ const CALENDAR_SELECT = `
   LEFT JOIN articles a ON a.id = c.source_article_id
 `;
 
-export async function listCalendarEvents(opts: { from?: string; to?: string; tickerSymbol?: string } = {}): Promise<CalendarEvent[]> {
+export async function listCalendarEvents(
+  opts: { from?: string; to?: string; tickerSymbol?: string; status?: 'active' | 'removed' | 'all' } = {}
+): Promise<CalendarEvent[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
+  const status = opts.status ?? 'active';
+  if (status !== 'all') {
+    params.push(status);
+    clauses.push(`c.status = $${params.length}`);
+  }
   if (opts.from) {
     params.push(opts.from);
     clauses.push(`c.event_date >= $${params.length}`);
@@ -894,6 +930,37 @@ export async function addCalendarEvent(input: {
     const full = await client.query<CalendarEventRow>(`${CALENDAR_SELECT} WHERE c.id = $1`, [result.rows[0]!.id]);
     return mapCalendarEvent(full.rows[0]!);
   });
+}
+
+/**
+ * Soft-removes calendar events (sets `status: 'removed'`, keeps the row) -
+ * same idiom as `removeWatchlistItem`/`removePortfolioHolding`. Addressed
+ * either by a single event's `id`, or by `ticker` to clear every remaining
+ * active event for that ticker in one call (e.g. a seeded/placeholder date,
+ * or cleaning up after a ticker you no longer follow) - exactly one of the
+ * two must be given. Already-removed events matching the filter are left
+ * alone (idempotent, and keeps the "removed" count meaningful).
+ *
+ * Returns every event this call actually removed (empty array, not an
+ * error, if nothing matched - "no active AAPL events" isn't a failure).
+ */
+export async function removeCalendarEvent(input: { id: string } | { ticker: string }): Promise<CalendarEvent[]> {
+  const id = 'id' in input ? input.id : null;
+  const tickerSymbol = 'ticker' in input ? input.ticker.toUpperCase() : null;
+  const result = await pool.query<{ id: string }>(
+    `UPDATE calendar_events
+     SET status = 'removed'
+     WHERE status = 'active'
+       AND ($1::uuid IS NULL OR id = $1)
+       AND ($2::text IS NULL OR ticker_symbol = $2)
+     RETURNING id`,
+    [id, tickerSymbol]
+  );
+  if (result.rowCount === 0) return [];
+  const full = await pool.query<CalendarEventRow>(`${CALENDAR_SELECT} WHERE c.id = ANY($1::uuid[])`, [
+    result.rows.map((r) => r.id),
+  ]);
+  return full.rows.map(mapCalendarEvent);
 }
 
 // ---------------------------------------------------------------------------

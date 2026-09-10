@@ -9,7 +9,7 @@ routes.
 
 Everything here is generated from what's actually registered in
 `src/mcp/server.ts` and implemented in `src/db/queries.ts` as of the
-`set_portfolio_manual_price` tool (2026-09-08) - not aspirational. If you add
+`remove_calendar_event` tool (2026-09-10) - not aspirational. If you add
 or change a tool, update this file in the same change.
 
 ## Contents
@@ -62,10 +62,10 @@ each one.
   valid accounts means editing `ACCOUNTS` and redeploying the service; ask
   whoever runs this deployment what the current list is if you're not sure
   (`GET /api/accounts` on the REST side, no MCP tool exposes it directly).
-- **"Remove" is always a soft delete.** Watch-list and portfolio removals set
-  `status: 'removed'` and keep the row (history/audit trail); nothing here
-  hard-deletes user data. A removed item still shows up if you explicitly
-  ask for `status: 'removed'` or `'all'` on a list tool.
+- **"Remove" is always a soft delete.** Watch-list, portfolio, and calendar
+  removals set `status: 'removed'` and keep the row (history/audit trail);
+  nothing here hard-deletes user data. A removed item still shows up if you
+  explicitly ask for `status: 'removed'` or `'all'` on a list tool.
 - **Upsert semantics differ by resource - read this carefully:**
   - `add_watchlist_item` **preserves** any field you omit if the ticker is
     already on the watch-list (SQL `COALESCE`) - it's "fill in only what you
@@ -183,6 +183,7 @@ ArticleSummary & { body: string, createdAt: string, updatedAt: string }
   title: string,
   description: string | null,
   eventType: 'earnings' | 'dividend' | 'macro' | 'catalyst' | 'other',
+  status: 'active' | 'removed',
   ticker: { symbol: string, name: string } | null,
   sourceArticle: { id: string, title: string, slug: string } | null,
   createdAt: string
@@ -539,10 +540,32 @@ Returns: `CalendarEvent`.
 | `from` | string `YYYY-MM-DD` | no | Defaults to today |
 | `to` | string `YYYY-MM-DD` | no | Defaults to 30 days from today |
 | `ticker` | string | no | Filter to one ticker |
+| `status` | `'active' \| 'removed' \| 'all'` | no | Defaults to `'active'` |
 
 Returns: `CalendarEvent[]`, ascending by date. Despite the name, this is a
 plain date-range filter, not specifically "future" events - passing a `from`
 in the past returns past events too.
+
+### `remove_calendar_event`
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `id` | string | conditionally | Removes this one event |
+| `ticker` | string | conditionally | Removes every remaining *active* event for this ticker |
+
+Provide **exactly one** of `id`/`ticker` - `isError: true` with
+`Provide either id or ticker` if neither is given, or
+`Provide only one of id or ticker, not both` if both are. Soft delete, same
+as `remove_watchlist_item`/`remove_portfolio_holding` - sets
+`status: 'removed'` rather than deleting the row.
+
+Returns the array of events actually removed (so the `ticker` form tells you
+how many there were, not just that the call succeeded). Errors instead -
+`No active calendar event with id <id>` or
+`No active calendar events for <ticker>` - if nothing matched (an
+already-removed event, an unknown id, or a ticker with none). This is the
+tool to use for a one-off cleanup like clearing the seed data's placeholder
+event: `{ "ticker": "AAPL" }` removes it without needing its id.
 
 ## REST ↔ MCP parity
 
@@ -567,5 +590,7 @@ equivalent of an MCP tool, or vice versa, without re-reading `routes.ts`.
 | `set_portfolio_manual_price` | `PATCH /api/portfolio/:symbol/:account/manual-price` |
 | `list_portfolio` | `GET /api/portfolio` |
 | `add_calendar_event` | `POST /api/calendar` |
-| `list_upcoming_events` | `GET /api/calendar` (REST doesn't default the range the same way - it returns everything if `from`/`to` are omitted, where this tool defaults to the next 30 days) |
+| `list_upcoming_events` | `GET /api/calendar` (REST doesn't default the range the same way - it returns everything if `from`/`to` are omitted, where this tool defaults to the next 30 days; both default `status` to `'active'`) |
+| `remove_calendar_event` (`ticker` form) | `DELETE /api/calendar?ticker=...` |
+| `remove_calendar_event` (`id` form) | `DELETE /api/calendar/:id` |
 | *(none - MCP-only)* | `GET /api/accounts`, `GET /api/tickers`, `GET /api/news`, `PATCH /api/news/:id/read`, and plain `GET /api/articles` (list/browse without a search query - `search_articles` requires a non-empty query, so there's no MCP equivalent for "just list recent articles") - no MCP tool wraps any of these yet |
