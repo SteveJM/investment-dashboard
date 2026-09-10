@@ -95,7 +95,7 @@ each one.
      symbol, no portfolio holding for that ticker+account, etc.) come back as
      a *successful* MCP call whose result has `isError: true` and a plain
      English `content[0].text` message - e.g.
-     `No portfolio holding for XYZ in "Steve ISA"`. Check `isError`, not just
+     `No portfolio holding for XYZ in "ISA"`. Check `isError`, not just
      whether the call itself threw.
 
 ## Data shapes
@@ -260,7 +260,7 @@ Example call arguments:
   "tickers": [
     { "symbol": "AAL", "name": "Anglo American plc", "exchange": "LSE",
       "context": "Core position, adding on weakness",
-      "addToWatchlist": true, "account": "Steve ISA", "buyBelow": 22.50 }
+      "addToWatchlist": true, "account": "ISA", "buyBelow": 22.50 }
   ],
   "calendarEvents": [
     { "date": "2026-09-25", "title": "AAL half-year results", "eventType": "earnings", "ticker": "AAL" }
@@ -490,12 +490,12 @@ doesn't exist.
 
 Example call (setting):
 ```json
-{ "symbol": "GB00B1DSZS09", "account": "Steve ISA", "price": 32.22 }
+{ "symbol": "GB00B1DSZS09", "account": "ISA", "price": 32.22 }
 ```
 
 Example call (clearing, back to automatic):
 ```json
-{ "symbol": "GB00B1DSZS09", "account": "Steve ISA", "price": null }
+{ "symbol": "GB00B1DSZS09", "account": "ISA", "price": null }
 ```
 
 ### `list_portfolio`

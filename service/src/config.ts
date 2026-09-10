@@ -13,7 +13,7 @@ function required(name: string, fallback?: string): string {
 // plain comma-separated env var rather than a hard-coded list. Validated
 // (non-empty) at startup since both the REST/MCP request schemas and the
 // frontend's dropdowns are built from this list - see service/README.md.
-const accounts = (process.env.ACCOUNTS ?? 'Steve ISA,Ruth ISA,Steve Pension')
+const accounts = (process.env.ACCOUNTS ?? 'ISA,Taxable,Pension')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
